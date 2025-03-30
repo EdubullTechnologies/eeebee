@@ -2105,7 +2105,7 @@ def enhanced_login(org_code, login_id, password, topic_id, is_english_mode, user
 
 def login_screen():
     try:
-        image_url = "https://raw.githubusercontent.com/EdubullTechnologies/QR-ChatBot/master/Desktop/app-final-qrcode/assets/login_page_img.png"
+        image_url = "https://raw.githubusercontent.com/EdubullTechnologies/eeebee/refs/heads/main/login_page_img.png"
         col1, col2 = st.columns([1, 2])
         with col1:
             st.image(image_url, width=160)
@@ -2293,7 +2293,7 @@ def main_screen():
     topic_name = st.session_state.auth_data.get('TopicName')
 
     # Display header
-    icon_img = "https://raw.githubusercontent.com/EdubullTechnologies/QR-ChatBot/master/Desktop/app-final-qrcode/assets/icon.png"
+    icon_img = "https://raw.githubusercontent.com/EdubullTechnologies/eeebee/refs/heads/main/icon.png"
     st.markdown(
         f"""
         # Hello {user_name}, <img src="{icon_img}" alt="EeeBee AI" style="width:55px; vertical-align:middle;"> EeeBee AI buddy is here to help you with :blue[{topic_name}]
