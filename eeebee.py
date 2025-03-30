@@ -1677,6 +1677,7 @@ Teacher Mode Instructions:
 - When teachers select a student number from the list, show detailed analysis for that student
 - Keep all mathematical expressions within LaTeX delimiters.
 - Focus on helping teachers analyze student performance and design effective strategies.
+- Never provide dummy data to teachers.
 
 Commands to recognize:
 - "show classes" or "list classes" - Display available classes with numbers
