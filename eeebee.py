@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 from matplotlib import rcParams
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import plotly.express as px
+from datetime import datetime
 
 # Set page config first, before any other Streamlit commands
 st.set_page_config(
@@ -139,6 +140,8 @@ if "selected_student" not in st.session_state:
     st.session_state.selected_student = None
 if "student_info" not in st.session_state:
     st.session_state.student_info = None
+if "stored_org_code" not in st.session_state:
+    st.session_state.stored_org_code = None
 
 # Define the show_gap_message function globally
 def show_gap_message():
@@ -651,22 +654,21 @@ def format_remedial_resources(resources):
 # 3) BASELINE TESTING REPORT (MODIFIED)
 # ----------------------------------------------------------------------------
 def fetch_baseline_data(org_code, subject_id, user_id):
-    payload = {
-        "UserID": user_id,
+    params = {
+        "OrgCode": st.session_state.stored_org_code,
         "SubjectID": subject_id,
-        "OrgCode": org_code
+        "UserID": user_id
     }
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0",
         "Accept": "application/json"
     }
-
     try:
-        with st.spinner("EeeBee is waking up..."):
-            response = requests.post(API_BASELINE_REPORT, json=payload, headers=headers)
-            response.raise_for_status()
-            return response.json()
+        response = requests.post(API_BASELINE_REPORT, json=params, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        return data
     except Exception as e:
         st.error(f"Error fetching baseline data: {e}")
         return None
@@ -980,18 +982,23 @@ def teacher_dashboard():
     batch_options = {b['BatchName']: b for b in batches}
     selected_batch_name = st.selectbox("Select a Batch:", list(batch_options.keys()), key="batch_selector")
     selected_batch = batch_options.get(selected_batch_name)
+    
+    if not selected_batch:
+        st.warning("Please select a valid batch.")
+        return # Exit if no batch is selected
+
     selected_batch_id = selected_batch["BatchID"]
     total_students = selected_batch.get("StudentCount", 0)
 
     if selected_batch_id and st.session_state.selected_batch_id != selected_batch_id:
         st.session_state.selected_batch_id = selected_batch_id
-        user_info = st.session_state.auth_data.get('UserInfo', [{}])[0]
-        org_code = user_info.get('OrgCode', '012')
+        
         params = {
             "BatchID": selected_batch_id,
             "TopicID": st.session_state.topic_id,
-            "OrgCode": org_code
+            "OrgCode": st.session_state.stored_org_code
         }
+        
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0",
@@ -1015,153 +1022,150 @@ def teacher_dashboard():
             except Exception as e:
                 st.error(f"Error fetching concept data: {e}")
                 st.session_state.teacher_weak_concepts = []
-
-    if st.session_state.teacher_weak_concepts:
-        # Initialize the dashboard view in session state if it doesn't exist
-        if "dashboard_view" not in st.session_state:
-            st.session_state.dashboard_view = "Class Overview"
+    
+    # Create radio buttons for different dashboard views instead of tabs
+    dashboard_view = st.radio(
+        "Dashboard View:",
+        ["📊 Class Overview", "📝 Question Generation"],
+        key="dashboard_view_radio",
+        index=0 if getattr(st.session_state, 'dashboard_view', "Class Overview") == "Class Overview" else 1
+    )
+    
+    # Update the session state with the current view
+    st.session_state.dashboard_view = "Class Overview" if dashboard_view == "📊 Class Overview" else "Question Generation"
+    
+    if dashboard_view == "📊 Class Overview":
+        st.subheader("Class Performance Overview")
         
-        # Create radio buttons for different dashboard views instead of tabs
-        dashboard_view = st.radio(
-            "Dashboard View:",
-            ["📊 Class Overview", "📝 Question Generation"],
-            key="dashboard_view_radio",
-            index=0 if st.session_state.dashboard_view == "Class Overview" else 1
-        )
+        # Display metrics at the top
+        # Check if teacher_weak_concepts is a list (old API format) or dict (new API format)
+        if isinstance(st.session_state.teacher_weak_concepts, list):
+            concepts_data = st.session_state.teacher_weak_concepts
+            students_data = []  # No student data in old format
+        else:
+            concepts_data = st.session_state.teacher_weak_concepts.get("Concepts", [])
+            students_data = st.session_state.teacher_weak_concepts.get("Students", [])
         
-        # Update the session state with the current view
-        st.session_state.dashboard_view = "Class Overview" if dashboard_view == "📊 Class Overview" else "Question Generation"
+        # Calculate key metrics
+        total_concepts = len(concepts_data)
         
-        if dashboard_view == "📊 Class Overview":
-            st.subheader("Class Performance Overview")
+        # Calculate student progress metrics if available
+        if students_data:
+            students_with_weak_concepts = sum(1 for s in students_data if s.get("WeakConceptCount", 0) > 0)
+            students_with_cleared_concepts = sum(1 for s in students_data if s.get("ClearedConceptCount", 0) > 0)
             
-            # Display metrics at the top
-            # Check if teacher_weak_concepts is a list (old API format) or dict (new API format)
-            if isinstance(st.session_state.teacher_weak_concepts, list):
-                concepts_data = st.session_state.teacher_weak_concepts
-                students_data = []  # No student data in old format
-            else:
-                concepts_data = st.session_state.teacher_weak_concepts.get("Concepts", [])
-                students_data = st.session_state.teacher_weak_concepts.get("Students", [])
-            
-            # Calculate key metrics
-            total_concepts = len(concepts_data)
-            
-            # Calculate student progress metrics if available
-            if students_data:
-                students_with_weak_concepts = sum(1 for s in students_data if s.get("WeakConceptCount", 0) > 0)
-                students_with_cleared_concepts = sum(1 for s in students_data if s.get("ClearedConceptCount", 0) > 0)
-                
-                # Calculate average progress percentage
-                avg_progress = sum(s.get("ClearedConceptCount", 0) / max(s.get("TotalConceptCount", 1), 1) * 100 
-                                  for s in students_data) / len(students_data)
-            else:
-                students_with_weak_concepts = 0
-                students_with_cleared_concepts = 0
-                avg_progress = 0
-            
-            # Display metrics in columns
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Students", total_students)
-            col2.metric("Total Concepts", total_concepts)
-            col3.metric("Students Needing Help", students_with_weak_concepts)
-            col4.metric("Average Progress", f"{avg_progress:.1f}%")
-            
-            # Display the improved graphs
+            # Calculate average progress percentage
+            avg_progress = sum(s.get("ClearedConceptCount", 0) / max(s.get("TotalConceptCount", 1), 1) * 100 
+                               for s in students_data) / len(students_data)
+        else:
+            students_with_weak_concepts = 0
+            students_with_cleared_concepts = 0
+            avg_progress = 0
+        
+        # Display metrics in columns
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Students", total_students)
+        col2.metric("Total Concepts", total_concepts)
+        col3.metric("Students Needing Help", students_with_weak_concepts)
+        col4.metric("Average Progress", f"{avg_progress:.1f}%")
+        
+        # Display additional graphs if available
+        if hasattr(st, 'pyplot'):
             display_additional_graphs(st.session_state.teacher_weak_concepts)
-            
-            # Display student list
-            if students_data:
-                with st.expander("👨‍🎓 Student List", expanded=False):
-                    students_df = pd.DataFrame(students_data)
-                    students_df["Progress"] = (students_df["ClearedConceptCount"] / students_df["TotalConceptCount"] * 100).round(1).astype(str) + "%"
-                    students_df = students_df[["FullName", "ClearedConceptCount", "WeakConceptCount", "TotalConceptCount", "Progress"]]
-                    students_df.columns = ["Student Name", "Concepts Cleared", "Weak Concepts", "Total Concepts", "Progress"]
-                    st.dataframe(students_df, use_container_width=True)
         
-        elif dashboard_view == "📝 Question Generation":
-            # Bloom's Level
-            st.subheader("📝 Question Generation")
-            bloom_level = st.radio(
-                "Select Bloom's Taxonomy Level for the Questions",
-                [
-                    "L1 (Remember)",
-                    "L2 (Understand)",
-                    "L3 (Apply)",
-                    "L4 (Analyze)",
-                    "L5 (Evaluate)"
-                ],
-                index=2,
-                key="bloom_taxonomy_selector"
-            )
-            bloom_short = bloom_level.split()[0]  # e.g. "L4"
+        # Display student list
+        if students_data:
+            with st.expander("👨‍🎓 Student List", expanded=False):
+                students_df = pd.DataFrame(students_data)
+                students_df["Progress"] = (students_df["ClearedConceptCount"] / students_df["TotalConceptCount"] * 100).round(1).astype(str) + "%"
+                students_df = students_df[["FullName", "ClearedConceptCount", "WeakConceptCount", "TotalConceptCount", "Progress"]]
+                students_df.columns = ["Student Name", "Concepts Cleared", "Weak Concepts", "Total Concepts", "Progress"]
+                st.dataframe(students_df, use_container_width=True)
+    
+    elif dashboard_view == "📝 Question Generation":
+        # Bloom's Level
+        st.subheader("📝 Question Generation")
+        bloom_level = st.radio(
+            "Select Bloom's Taxonomy Level for the Questions",
+            [
+                "L1 (Remember)",
+                "L2 (Understand)",
+                "L3 (Apply)",
+                "L4 (Analyze)",
+                "L5 (Evaluate)"
+            ],
+            index=2,
+            key="bloom_taxonomy_selector"
+        )
+        bloom_short = bloom_level.split()[0]  # e.g. "L4"
 
-            # Handle both data formats for concept selection
-            if isinstance(st.session_state.teacher_weak_concepts, list):
-                concept_list = {c["ConceptText"]: c["ConceptID"] for c in st.session_state.teacher_weak_concepts}
-            else:
-                concept_list = {c["ConceptText"]: c["ConceptID"] for c in st.session_state.teacher_weak_concepts.get("Concepts", [])}
-                
-            if concept_list:
-                chosen_concept_text = st.radio("Select a Concept to Generate Exam Questions:", list(concept_list.keys()), key="concept_selector_teacher")
+        # Handle both data formats for concept selection
+        if isinstance(st.session_state.teacher_weak_concepts, list):
+            concept_list = {c["ConceptText"]: c["ConceptID"] for c in st.session_state.teacher_weak_concepts}
+        else:
+            concept_list = {c["ConceptText"]: c["ConceptID"] for c in st.session_state.teacher_weak_concepts.get("Concepts", [])}
+            
+        if concept_list:
+            chosen_concept_text = st.radio("Select a Concept to Generate Exam Questions:", list(concept_list.keys()), key="concept_selector_teacher")
 
-                if chosen_concept_text:
-                    chosen_concept_id = concept_list[chosen_concept_text]
-                    st.session_state.selected_teacher_concept_id = chosen_concept_id
-                    st.session_state.selected_teacher_concept_text = chosen_concept_text
+            if chosen_concept_text:
+                chosen_concept_id = concept_list[chosen_concept_text]
+                st.session_state.selected_teacher_concept_id = chosen_concept_id
+                st.session_state.selected_teacher_concept_text = chosen_concept_text
 
-                    if st.button("Generate Exam Questions", key="generate_exam_btn"):
-                        if not client:
-                            st.error("DeepSeek client is not initialized. Check your API key.")
-                            return
+                if st.button("Generate Exam Questions", key="generate_exam_btn"):
+                    if not client:
+                        st.error("EeeBee API client is not initialized. Check your configuration.")
+                        return
 
-                        branch_name = st.session_state.auth_data.get("BranchName", "their class")
-                        prompt = (
-                            f"You are a highly knowledgeable educational assistant named EeeBee, built by Edubull, and specialized in {st.session_state.auth_data.get('TopicName', 'Unknown Topic')}.\n\n"
-                            f"Teacher Mode Instructions:\n"
-                            f"- The user is a teacher instructing {branch_name} students under the NCERT curriculum.\n"
-                            f"- Provide detailed suggestions on how to explain concepts and design assessments for the {branch_name} level.\n"
-                            f"- Offer insights into common student difficulties and ways to address them.\n"
-                            f"- Encourage a teaching methodology where students learn progressively, asking guiding questions rather than providing direct answers.\n"
-                            f"- Maintain a professional, informative tone, and ensure all advice aligns with the NCERT curriculum.\n"
-                            f"- Keep all mathematical expressions within LaTeX delimiters ($...$ or $$...$$).\n"
-                            f"- Emphasize to the teacher the importance of fostering critical thinking.\n"
-                            f"- If the teacher requests sample questions, provide them in a progressive manner, ensuring they prompt the student to reason through each step.\n\n"
-                            f"Now, generate a set of 20 exam questions for the concept '{chosen_concept_text}' at Bloom's Taxonomy **{bloom_short}**.\n"
-                            f"Label each question clearly with **({bloom_short})** and use LaTeX for any math.\n"
-                        )
-
-                        with st.spinner("Generating exam questions... Please wait."):
-                            try:
-                                response = client.chat.completions.create(
-                                    model="gpt-4o",
-                                    messages=[{"role": "system", "content": prompt}],
-                                    max_tokens=4000,
-                                    stream=False
-                                )
-                                # Use dot-notation to access the content
-                                questions = response.choices[0].message.content.strip()
-                                st.session_state.exam_questions = questions
-                                st.success("Exam questions generated successfully!")
-                                
-                                st.markdown("### 📝 Generated Exam Questions")
-                                st.markdown(questions.replace("\n", "<br>"), unsafe_allow_html=True)
-                                
-                                pdf_bytes = generate_exam_questions_pdf(
-                                    questions,
-                                    chosen_concept_text,
-                                    st.session_state.auth_data['UserInfo'][0]['FullName']
-                                )
-                                st.download_button(
-                                    label="📥 Download Exam Questions as PDF",
-                                    data=pdf_bytes,
-                                    file_name=f"{st.session_state.auth_data['UserInfo'][0]['FullName']}_Exam_Questions_{chosen_concept_text}.pdf",
-                                    mime="application/pdf"
-                                )
-                            except Exception as e:
-                                st.error(f"Error generating exam questions: {e}")
-            else:
-                st.info("No concepts available for question generation.")
+                    branch_name = st.session_state.auth_data.get("BranchName", "their class")
+                    
+                    prompt = (
+                        f"You are a highly knowledgeable educational assistant named EeeBee, built by Edubull, and specialized in {st.session_state.auth_data.get('TopicName', 'Unknown Topic')}.\n\n"
+                        f"Teacher Mode Instructions:\n"
+                        f"- The user is a teacher instructing {branch_name} students under the NCERT curriculum.\n"
+                        f"- Provide detailed suggestions on how to explain concepts and design assessments for the {branch_name} level.\n"
+                        f"- Offer insights into common student difficulties and ways to address them.\n"
+                        f"- Encourage a teaching methodology where students learn progressively, asking guiding questions rather than providing direct answers.\n"
+                        f"- Maintain a professional, informative tone, and ensure all advice aligns with the NCERT curriculum.\n"
+                        f"- Keep all mathematical expressions within LaTeX delimiters ($...$ or $$...$$).\n"
+                        f"- Emphasize to the teacher the importance of fostering critical thinking.\n"
+                        f"- If the teacher requests sample questions, provide them in a progressive manner, ensuring they prompt the student to reason through each step.\n\n"
+                        f"Now, generate a set of 20 exam questions for the concept '{chosen_concept_text}' at Bloom's Taxonomy **{bloom_short}**.\n"
+                        f"Label each question clearly with **({bloom_short})** and use LaTeX for any math.\n"
+                    )
+                    
+                    with st.spinner("Generating exam questions... Please wait."):
+                        try:
+                            response = client.chat.completions.create(
+                                model="gpt-4o",  # Using default model
+                                messages=[{"role": "system", "content": prompt}],
+                                max_tokens=4000,
+                                stream=False
+                            )
+                            # Use dot-notation to access the content
+                            questions = response.choices[0].message.content.strip()
+                            st.session_state.exam_questions = questions
+                            st.success("Exam questions generated successfully!")
+                            
+                            st.markdown("### 📝 Generated Exam Questions")
+                            st.markdown(questions.replace("\n", "<br>"), unsafe_allow_html=True)
+                            
+                            pdf_bytes = generate_exam_questions_pdf(
+                                questions,
+                                chosen_concept_text,
+                                st.session_state.auth_data['UserInfo'][0]['FullName']
+                            )
+                            st.download_button(
+                                label="📥 Download Exam Questions as PDF",
+                                data=pdf_bytes,
+                                file_name=f"{st.session_state.auth_data['UserInfo'][0]['FullName']}_Exam_Questions_{chosen_concept_text}.pdf",
+                                mime="application/pdf"
+                            )
+                        except Exception as e:
+                            st.error(f"Error generating exam questions: {e}")
+        else:
+            st.info("No concepts available for question generation.")
 
 # ------------------- 2J) CHAT FUNCTIONS -------------------
 def add_initial_greeting():
@@ -1272,11 +1276,11 @@ def format_concept_details(concept):
     )
 
 def fetch_student_info(batch_id, topic_id, org_code):
-    """Fetch student information for a specific batch - exact implementation from test.py"""
+    """Fetch student information for a specific batch"""
     params = {
         "BatchID": batch_id,
         "TopicID": topic_id,
-        "OrgCode": org_code
+        "OrgCode": st.session_state.stored_org_code
     }
     headers = {
         "Content-Type": "application/json",
@@ -1284,23 +1288,19 @@ def fetch_student_info(batch_id, topic_id, org_code):
         "Accept": "application/json"
     }
     try:
-        logging.info(f"Fetching student info with params: {params}")
         response = requests.post(API_STUDENT_INFO, json=params, headers=headers)
         response.raise_for_status()
-        data = response.json()
-        logging.info(f"Student info API response status: {data.get('Status', 'No status')}")
-        return data
+        return response.json()
     except Exception as e:
-        logging.error(f"Error fetching student info: {e}")
         st.error(f"Error fetching student info: {e}")
         return None
 
 def fetch_student_concepts(user_id, topic_id, org_code):
-    """Fetch detailed concept information for a specific student - exact implementation from test.py"""
+    """Fetch detailed concept information for a specific student"""
     params = {
         "UserID": user_id,
         "TopicID": topic_id,
-        "OrgCode": org_code
+        "OrgCode": st.session_state.stored_org_code
     }
     headers = {
         "Content-Type": "application/json",
@@ -1308,14 +1308,10 @@ def fetch_student_concepts(user_id, topic_id, org_code):
         "Accept": "application/json"
     }
     try:
-        logging.info(f"Fetching student concepts with params: {params}")
         response = requests.post(API_STUDENT_CONCEPTS, json=params, headers=headers)
         response.raise_for_status()
-        data = response.json()
-        logging.info(f"Student concepts API response status: {data.get('Status', 'No status')}")
-        return data
+        return response.json()
     except Exception as e:
-        logging.error(f"Error fetching student concepts: {e}")
         st.error(f"Error fetching student concepts: {e}")
         return None
 
@@ -1417,7 +1413,7 @@ def handle_batch_selection(selected_batch):
     student_info = fetch_student_info(
         selected_batch["BatchID"],
         st.session_state.topic_id,
-        st.session_state.auth_data['UserInfo'][0].get('OrgCode', '012')
+        st.session_state.stored_org_code
     )
     
     if student_info and student_info.get("Students"):
@@ -1516,7 +1512,7 @@ def handle_student_selection(selected_student):
     student_concepts = fetch_student_concepts(
         user_id=selected_student['UserID'],
         topic_id=st.session_state.topic_id,
-        org_code=st.session_state.auth_data['UserInfo'][0].get('OrgCode', '012')
+        org_code=st.session_state.stored_org_code
     )
     
     # Calculate progress percentage
@@ -1585,72 +1581,6 @@ def handle_student_selection(selected_student):
     )
     
     return response
-
-def fetch_student_info(batch_id, topic_id, org_code):
-    """Fetch student information for a specific batch"""
-    params = {
-        "BatchID": batch_id,
-        "TopicID": topic_id,
-        "OrgCode": org_code
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json"
-    }
-    try:
-        response = requests.post(API_STUDENT_INFO, json=params, headers=headers)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Error fetching student info: {e}")
-        return None
-
-def fetch_student_concepts(user_id, topic_id, org_code):
-    """Fetch detailed concept information for a specific student"""
-    params = {
-        "UserID": user_id,
-        "TopicID": topic_id,
-        "OrgCode": org_code
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json"
-    }
-    try:
-        response = requests.post(API_STUDENT_CONCEPTS, json=params, headers=headers)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Error fetching student concepts: {e}")
-        return None
-
-def format_time(seconds):
-    """Convert seconds to a readable format"""
-    if seconds == 0:
-        return "N/A"
-    minutes = seconds // 60
-    remaining_seconds = seconds % 60
-    if minutes > 0:
-        return f"{minutes}m {remaining_seconds}s"
-    return f"{remaining_seconds}s"
-
-def format_concept_details(concept):
-    """Format concept details with performance metrics"""
-    if concept['AttendedQuestion'] == 0:
-        return (
-            f"- {concept['ConceptText']}\n"
-            f"  📝 Not attempted any questions yet"
-        )
-    
-    return (
-        f"- {concept['ConceptText']}\n"
-        f"  📝 Questions: {concept['CorrectQuestion']}/{concept['AttendedQuestion']} correct "
-        f"({concept['AvgMarksPercent']}%)\n"
-        f"  ⏱️ Average time per question: {format_time(concept['AvgTimeTaken_SS'])}\n"
-        f"  ⌛ Total time spent: {format_time(concept['TotalTimeTaken_SS'])}"
-    )
 
 def get_system_prompt():
     topic_name = st.session_state.auth_data.get('TopicName', 'Unknown Topic')
@@ -2092,6 +2022,41 @@ def enhanced_login(org_code, login_id, password, topic_id, is_english_mode, user
             user_info = auth_data.get("UserInfo", [{}])[0]
             st.session_state.user_id = user_info.get("UserID")
         
+        # Initialize chat session state
+        user_id = st.session_state.user_id
+        if user_id and topic_id:
+            # Get available chat sessions for this user and topic
+            st.session_state.chat_sessions = get_chat_sessions(user_id, topic_id)
+            
+            # If there are existing sessions, load the most recent one
+            if st.session_state.chat_sessions:
+                most_recent = st.session_state.chat_sessions[0]
+                chat_id = most_recent["chat_id"]
+                st.session_state.current_chat_id = chat_id
+                st.session_state.chat_history, st.session_state.current_chat_title = load_chat_session(
+                    chat_id, user_id, topic_id
+                )
+            else:
+                # Create a new chat session
+                chat_id = generate_chat_id()
+                st.session_state.current_chat_id = chat_id
+                st.session_state.chat_history = []
+                st.session_state.current_chat_title = "New Chat"
+                topic_name = auth_data.get('TopicName', 'Topic')
+                current_date = datetime.now().strftime("%d %b %Y")
+                st.session_state.current_chat_title = f"{topic_name} - {current_date}"
+                st.session_state.chat_sessions = []
+        else:
+            st.session_state.chat_history = []
+            st.session_state.current_chat_id = generate_chat_id()
+            topic_name = auth_data.get('TopicName', 'Topic')
+            current_date = datetime.now().strftime("%d %b %Y")
+            st.session_state.current_chat_title = f"{topic_name} - {current_date}"
+            st.session_state.chat_sessions = []
+        
+        # Store the org_code (school code) that user entered during login
+        st.session_state.stored_org_code = org_code
+        
         return True, None
             
     except requests.exceptions.RequestException as e:
@@ -2196,14 +2161,14 @@ def load_data_parallel():
     with ThreadPoolExecutor(max_workers=2) as executor:
         baseline_future = executor.submit(
             fetch_baseline_data,
-            org_code=st.session_state.auth_data['UserInfo'][0].get('OrgCode', '012'),
+            org_code=st.session_state.stored_org_code,
             subject_id=st.session_state.subject_id,
             user_id=st.session_state.user_id
         )
         
         concepts_future = executor.submit(
             fetch_all_concepts,
-            org_code=st.session_state.auth_data['UserInfo'][0].get('OrgCode', '012'),
+            org_code=st.session_state.stored_org_code,
             subject_id=st.session_state.subject_id,
             user_id=st.session_state.user_id
         )
@@ -2352,7 +2317,7 @@ def fetch_class_analysis(batch_id):
     try:
         # Prepare the payload
         payload = {
-            "OrgCode": st.session_state.auth_data['UserInfo'][0].get('OrgCode', ''),
+            "OrgCode": st.session_state.stored_org_code,
             "BatchID": batch_id,
             "TopicID": st.session_state.topic_id
         }
@@ -2405,7 +2370,7 @@ def fetch_student_analysis(student_id):
     try:
         # Prepare the payload
         payload = {
-            "OrgCode": st.session_state.auth_data['UserInfo'][0].get('OrgCode', ''),
+            "OrgCode": st.session_state.stored_org_code,
             "UserID": student_id,
             "TopicID": st.session_state.topic_id
         }
