@@ -81,3 +81,5 @@ scipy
 elevenlabs
 pymupdf
 python-docx
+plotly
+streamlit-autorefresh
